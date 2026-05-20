@@ -1,55 +1,111 @@
-from langgraph.graph import StateGraph, START, END
-from typing import TypedDict, Annotated
-from langchain_core.messages import HumanMessage, BaseMessage, AIMessage
-from langchain_ollama import ChatOllama
-from langgraph.graph.message import add_messages
-from langgraph.checkpoint.memory import MemorySaver
+import streamlit as st
+from backend import chatFlow
+import uuid
+from langchain_core.messages import AIMessageChunk,HumanMessage,AIMessage
 
-import warnings
-warnings.filterwarnings("ignore")
+# generate a new thread id
+def generate_thread_id():
+    return uuid.uuid4()
 
-
-# create the state 
-class ChatState(TypedDict):
-    messages: Annotated[list[BaseMessage] , add_messages]
-
-chat_model = ChatOllama(model = "phi4-mini:latest")
-
-def chat_node(state: ChatState):
-    global chat_model
-    # take user query from state
-    messages = state['messages']
-    # send query to llm 
-    response = chat_model.invoke(messages)
-    # store the reponse
-    return {
-        "messages": [AIMessage(response.content)]
-    }
-
-thread_id = "1"
-checkpoint = MemorySaver()
-graph = StateGraph(ChatState)
-
-graph.add_node("chat_node" , chat_node)
-
-graph.add_edge(START , "chat_node")
-graph.add_edge("chat_node" , END)
-
-chatbot = graph.compile(checkpointer = checkpoint)
-config = {
-    "configurable": {"thread_id" : thread_id}
-}
-while True:
-    human_message = input("User:")
-    if human_message.strip().lower() in ['exit', 'done', 'bye', 'quit']:
-        break
+def reset_chat():
+    # Generate a new thread ID and reset chat history
+    new_thread_id = generate_thread_id()
+    st.session_state["thread_id"] = new_thread_id
     
-    state = {
-        "messages": [HumanMessage(content = human_message)]
-    }
-     
-    result = chatbot.invoke(state , config = config)
-    model_response = result['messages'][-1].content
+    if new_thread_id not in st.session_state["all_threads"]:
+        st.session_state["all_threads"].append(new_thread_id)
+    st.session_state["chat_history"] = []
+
+def load_conversation(thread_id):
+    graph = st.session_state["graph"]
+    state = chatFlow.get_state(
+        config = {"configurable": {"thread_id": str(thread_id)}}
+    ).values
     
+    # state['chat_history'] contains LangChain message objects
+    messages = state.get("messages" , [])
+    history = []
+    for msg in messages:
+        if isinstance(msg , HumanMessage):
+            role = "user"
+        elif isinstance(msg , AIMessage):
+            role = "assistant"
+        else:
+            continue
+        
+        history.append({
+            "role": role , "content": msg.content
+        })
     
-    print(f"AI: {model_response}")
+    return history
+
+
+st.title("Chatbot with Temporary Memory")
+
+if "graph" not in st.session_state:
+    st.session_state["graph"] = chatFlow
+    
+if "all_threads" not in st.session_state:
+    st.session_state["all_threads"] = []
+
+
+# initialize the current active thread id
+if "thread_id" not in st.session_state:
+    current_thread_id = generate_thread_id()
+    st.session_state["thread_id"] = current_thread_id
+    st.session_state["all_threads"].append(current_thread_id)
+
+if "chat_history" not in st.session_state:
+    st.session_state["chat_history"] = []
+
+# sidebar ui
+st.sidebar.title("Chat History")
+if st.sidebar.button("New Chat"):
+    reset_chat()
+
+st.sidebar.header("My chats")
+# display threads in reverse order
+for thread in reversed(st.session_state["all_threads"]):
+    if thread == st.session_state["thread_id"]:
+        st.sidebar.markdown(f"**Thread ID: {str(thread)} (Active)**")
+    else:
+        # inactive threads
+        if st.sidebar.button(f"Load Thread {str(thread)}" , key = str(thread)):
+            # load this thread
+            st.session_state["thread_id"] = thread
+            # get the chat history for this thread
+            st.session_state["chat_history"] = load_conversation(thread)
+            st.rerun()
+              
+# render all messages for the current active thread
+for message in st.session_state["chat_history"]:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+        
+user_input = st.chat_input("Type here")
+
+if user_input:
+    with st.chat_message("user"):
+        st.text(user_input)
+        
+    st.session_state["chat_history"].append({"role": "user" , "content": user_input})
+    
+    # get the llm response
+    config = {"configurable": {"thread_id" : str(st.session_state["thread_id"])}}
+    graph = st.session_state["graph"]
+    
+    # stream generator function
+    def response_generator():
+        stream_response = graph.stream(
+            input = {"messages": [("user"  , user_input)]},
+            config = config,
+            stream_mode = "messages"
+        )
+        for chunk , metadata in stream_response:
+            if isinstance(chunk , AIMessageChunk) and chunk.content:
+                yield chunk.content
+                
+    with st.chat_message("assistant"):
+        ai_message = st.write_stream(response_generator())
+    
+    st.session_state["chat_history"].append({"role": "assistant" , "content": ai_message})
