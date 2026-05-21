@@ -5,7 +5,7 @@ from langchain_core.messages import AIMessageChunk,HumanMessage,AIMessage
 
 # generate a new thread id
 def generate_thread_id():
-    return uuid.uuid4()
+    return str(uuid.uuid4())
 
 def reset_chat():
     # Generate a new thread ID and reset chat history
@@ -17,13 +17,13 @@ def reset_chat():
     st.session_state["chat_history"] = []
 
 def load_conversation(thread_id):
-    graph = st.session_state["graph"]
-    state = chatFlow.get_state(
-        config = {"configurable": {"thread_id": str(thread_id)}}
-    ).values
+    config = {"configurable": {"thread_id": str(thread_id)}}
+    state = chatFlow.get_state(config = config)
     
-    # state['chat_history'] contains LangChain message objects
-    messages = state.get("messages" , [])
+    if not state or not state.values:
+        return []
+    
+    messages = state.values.get("messages" , [])
     history = []
     for msg in messages:
         if isinstance(msg , HumanMessage):
@@ -41,9 +41,6 @@ def load_conversation(thread_id):
 
 
 st.title("Chatbot with Temporary Memory")
-
-if "graph" not in st.session_state:
-    st.session_state["graph"] = chatFlow
     
 if "all_threads" not in st.session_state:
     st.session_state["all_threads"] = []
@@ -55,13 +52,12 @@ if "thread_id" not in st.session_state:
     st.session_state["thread_id"] = current_thread_id
     st.session_state["all_threads"].append(current_thread_id)
 
-if "chat_history" not in st.session_state:
-    st.session_state["chat_history"] = []
-
+st.session_state["chat_history"] = load_conversation(st.session_state["thread_id"])
 # sidebar ui
 st.sidebar.title("Chat History")
 if st.sidebar.button("New Chat"):
     reset_chat()
+    st.rerun()
 
 st.sidebar.header("My chats")
 # display threads in reverse order
@@ -86,26 +82,23 @@ user_input = st.chat_input("Type here")
 
 if user_input:
     with st.chat_message("user"):
-        st.text(user_input)
+        st.markdown(user_input)
         
-    st.session_state["chat_history"].append({"role": "user" , "content": user_input})
-    
     # get the llm response
     config = {"configurable": {"thread_id" : str(st.session_state["thread_id"])}}
-    graph = st.session_state["graph"]
     
     # stream generator function
     def response_generator():
-        stream_response = graph.stream(
+        stream_response = chatFlow.stream(
             input = {"messages": [("user"  , user_input)]},
             config = config,
             stream_mode = "messages"
         )
         for chunk , metadata in stream_response:
-            if isinstance(chunk , AIMessageChunk) and chunk.content:
+            if isinstance(chunk , (AIMessageChunk , AIMessage)) and chunk.content:
                 yield chunk.content
                 
     with st.chat_message("assistant"):
         ai_message = st.write_stream(response_generator())
     
-    st.session_state["chat_history"].append({"role": "assistant" , "content": ai_message})
+    st.rerun()

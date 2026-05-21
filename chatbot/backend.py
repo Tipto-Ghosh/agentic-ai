@@ -2,9 +2,9 @@ from langgraph.graph import START, END, StateGraph
 from typing import TypedDict, Annotated
 from langchain_core.messages import BaseMessage
 from langchain_ollama import ChatOllama
-from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph.message import add_messages
-
+import sqlite3
 
 model = ChatOllama(model = "qwen2.5:1.5b") 
 
@@ -18,7 +18,9 @@ def chatNode(state: ChatState):
         "messages": [response]
     }
 
-checkpointer = InMemorySaver()
+connection = sqlite3.connect(database = "chatbot.db" , check_same_thread = False)
+checkpointer = SqliteSaver(conn = connection)
+
 graph = StateGraph(ChatState)
 graph.add_node("chatNode" , chatNode)
 graph.add_edge(START , "chatNode")
