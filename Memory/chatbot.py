@@ -197,4 +197,4 @@ def run_chat(thread_id: str | None = None):
                     
 if __name__ == "__main__":
     print("Starting....")
-    run_chat(thread_id = None)
+    run_chat(thread_id = "0d4193bf-c3c6-4dc0-857b-8134ec2c2722")
